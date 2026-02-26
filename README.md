@@ -30,3 +30,5 @@ Starting from the identified peak position, the algorithm searches for the time 
 ### Window mode
 When `frac_win_mode` is 'on', the fractional search is restricted to the measurement window.
 When `frac_win_mode` is 'off', the fractional search is allowed to extend beyond the measurement window and can traverse the full signal. (See the fig)
+
+![Example Plot](test_plot.jpeg)
