@@ -32,3 +32,9 @@ When `frac_win_mode` is 'on', the fractional search is restricted to the measure
 When `frac_win_mode` is 'off', the fractional search is allowed to extend beyond the measurement window and can traverse the full signal. (See the fig)
 
 ![Example Plot](test_plot.jpeg)
+
+
+
+| channel  | amplitude | latency  | (50%) frac_latency |
+|----------|-----------|----------|--------------|
+| Ave      | -3.762    | -0.136   | -0.208       |
