@@ -1,5 +1,5 @@
 # ERP Peak and Latency
-This script measures ERP components using an algorithm similar to the approach implemented in ERPLAB. This implementation is inspired by the ERPLAB Toolbox: https://github.com/ucdavis/erplab
+This script measures ERP components based on MNE-Python using an algorithm similar to the approach implemented in ERPLAB. This implementation is inspired by the ERPLAB Toolbox: https://github.com/ucdavis/erplab
 
 The current version supports the following measurements:
 - Peak amplitude
