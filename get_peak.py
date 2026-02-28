@@ -279,7 +279,11 @@ def _compute_fractional_latency(datax, times, v_local, pos_start, fraction, frac
                 v0, v1 = prev_val, val 
                 t_frac = t0 + (target - v0) / (v1 - v0) * (t1 - t0) 
                 return t_frac 
-            else: return times[idx] 
+            else: 
+                if abs(prev_val - target) <= abs(val - target):
+                    return times[prev_idx]
+                else:
+                    return times[idx] 
             
         prev_idx = idx 
         prev_val = val 
@@ -311,4 +315,5 @@ print(r)
 
 #             value  latency  frac_latency
 # channel
+
 # Ave     -3.761501   -0.136        -0.208
