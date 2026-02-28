@@ -1,26 +1,26 @@
 import numpy as np
 import pandas as pd
-from mne.utils import _time_mask
-
-import mne
-
+from mne.utils import _time_mask, _check_option
+from scipy.interpolate import interp1d
+from scipy import integrate
 
 
 '''
 This script measures ERP values using an algorithm similar to ERPLAB, 
 see: https://erpinfo.org/erplab
 
-The current version supports only 
+The current version supports  
 peak amplitude, peak latency, and fractional peak latency
+area amplitude, mean amplitude, and fractional area latency
 
-TODO: mean amplitude, area amplitude, and fractional area latency.
+TODO: Further test function `_auto_boundary`, specially the auto boundary
+detection using `coi`.
 '''
 
 
-
-# =========================================================
+# Peak ERP =========================================================
 # Main Function
-# =========================================================
+# ==================================================================
 def find_local_peak(
     evoked,
     picks=None,
@@ -79,7 +79,6 @@ def find_local_peak(
     sfreq = evoked.info["sfreq"]
     data, times, ch_names = _prepare_data(evoked, picks, average)
     n = len(times)
-    data *= 1e6
 
     ## 2. Basic validation
     if n < 3:
@@ -169,7 +168,7 @@ def _prepare_data(evoked, picks=None, average=False):
     Optionally average across selected channels.
     """
         
-    datx = evoked.get_data(picks=picks)
+    datx = evoked.get_data(picks=picks, units=dict(eeg='uV'))
     timx = evoked.times
 
     if average:
@@ -292,28 +291,277 @@ def _compute_fractional_latency(datax, times, v_local, pos_start, fraction, frac
     return np.nan
 
 
-# ===================================================================
 
-# Test 
-path = r'D:/test_evoked_ave.fif'
-test_evoked = mne.read_evokeds(path, condition=0)
+# Area ERP =========================================================
+# Main Function
+# ==================================================================
 
-r = find_local_peak(test_evoked,
-                    picks=None,
-                    neighborhood=1,
-                    peak_polarity="negative",
-                    measure="both",
-                    fraction=0.5,
-                    frac_direction="left",
-                    peak_replace="abs",
-                    meas_win=(-0.2, 0),
-                    frac_win_mode="off",
-                    average=True,
-                    interp=False)
+# TODO: 
+# 1. get the boudary of time window based on ROI waveform
+# 2. use the boudary back to single channels
 
-print(r)
+# Area 
+def get_area(
+    evoked,
+    meas_win, 
+    picks='None',
+    mode='abs',
+    boundary_mode='auto',
+    coi=0,
+    average=False,
+    frac = 0.5,
+    side = 'left',
+    boundary_log = False
+):
+    '''
+    Calculate the area under the curve and fractional area latency for ERP data.
 
-#             value  latency  frac_latency
-# channel
+    This function identifies a specific segment of the signal (based on time windows 
+    and auto boundary detection) and computes its area, mean amplitude, and the time 
+    point where a certain percentage of the area is reached.
 
-# Ave     -3.761501   -0.136        -0.208
+    Parameters:
+    -----------
+    evoked : mne.Evoked
+        The evoked data object.
+    meas_win : list | tuple
+        The time window [start, end] in seconds for measurement.
+    picks : str | list | None
+        Channels to include. Defaults to 'None' (all).
+    mode : str
+        Method to process the signal: 
+        'abs' (absolute), 'neg' (negative only), 'pos' (positive only), 'intg' (original).
+    boundary_mode : str
+        How to define the integration edges:
+        'fixed': Use `meas_win` strictly.
+        'auto': Automatically find zero-crossings around the peak.
+        'hybrid': Use the intersection of fixed and auto boundaries.
+    coi : int
+        Condition of interest for boundary refinement (used in _auto_boundary).
+    average : bool
+        If True, average across selected channels before calculation.
+    frac : float
+        The fraction of the area (0 to 1) to calculate latency for (e.g., 0.5 for median).
+    side : str
+        Direction to accumulate the area: 'left' (start to end) or 'right' (end to start).
+
+    Returns:
+    --------
+    pd.DataFrame
+        A DataFrame containing channel names, area, mean amplitude, and fractional latency.
+    '''
+    
+    _check_option("mode", mode, ["abs", "neg", "pos", "intg"])
+    _check_option("boundary_mode", boundary_mode, ["fixed", "auto", "hybrid"])
+    if not (0 < frac < 1):
+        raise ValueError("`fraction` must be in (0,1).")
+    
+    # basic data
+    datx, timx, ch_names = _prepare_data(evoked, picks=picks, average=average)
+    
+    #trans time to sample
+    twin = [
+        int(np.argmin(np.abs(timx - meas_win[0]))),
+        int(np.argmin(np.abs(timx - meas_win[1])))
+    ]
+    
+    area_results = []
+    mean_amps = []
+    lat_results = []
+    b_log = []
+    for i, ch_data in enumerate(datx):
+        if boundary_mode == 'fixed':
+            a, b = twin
+        else:
+            a_auto, b_auto = _auto_boundary(ch_data, twin, coi)
+            
+            if boundary_mode == "auto":
+                a, b = a_auto, b_auto
+            elif boundary_mode == "hybrid":
+                a = max(a_auto, twin[0])
+                b = min(b_auto, twin[1])
+                
+            # boundary log
+            if boundary_log:
+                log = _boundary_report(ch_names[i], twin, (a,b), timx)
+                if log:
+                    b_log.append(log)
+                
+        # area calculator
+        seg = ch_data[a:b+1]
+        tseg = timx[a:b+1]
+        area, mean_amp = _area_calculation(seg, tseg, mode)
+        area_results.append(area)
+        mean_amps.append(mean_amp)
+        
+        # find frac_area_lat 
+        seg_t = _apply_mode(seg, mode)
+        frac_area_lat = _frac_area_latency(seg_t, tseg, area, fraction=frac, side=side)
+        lat_results.append(frac_area_lat)
+        
+    df_res =  pd.DataFrame({
+        "channel": ch_names,
+        "area": area_results,
+        "mean_amp": mean_amps,
+        "frac_area_lat": lat_results
+    })
+    
+    if boundary_log:
+        df_boundary = pd.DataFrame(b_log)
+        return df_res, df_boundary
+    else:
+        return df_res
+    
+
+# auto boundary mode
+def _auto_boundary(data, latsam, coi=0):
+    
+    '''
+    Automatically detects boundaries for a wave component.
+    
+    Inspired by the ERPlab Toolbox. It starts from a calculated 'seed' point 
+    between the window edges and expands outwards until the signal crosses 
+    zero or changes sign, effectively "isolating" a single peak.
+    
+    Parameters:
+    -----------
+    coi : int
+        Specific logic for overlapping waves. 
+        0. find 0 point
+        1: find next local minimum to the right; 
+        2: find next local minimum to the left.
+    '''
+        
+    # locate the seed
+    t1, t2 = latsam
+    segment = data[t1:t2+1]
+    peak_r = np.argmax(np.abs(segment))
+    seed = peak_r + t1
+    peak_sign = np.sign(data[seed])
+    if peak_sign == 0:
+        return t1, t2
+    
+    # find zero-crossing
+    a = seed
+    while a > 0 and np.sign(data[a]) == peak_sign:
+        a -= 1
+    b = seed
+    while b < len(data) - 1 and np.sign(data[b]) == peak_sign:
+        b += 1
+    
+    if coi == 0:
+        return a, b
+        
+    # overlapped waves
+    data_rect = data.copy()
+    data_rect[:a] = 0
+    data_rect[b:] = 0
+    data_rect = np.abs(data_rect)
+    ndata = len(data_rect)
+    
+    # rectified data
+    datamax = np.max(data_rect[a:b+1])
+    imax = np.argmax(data_rect[a:b+1]) + a
+    
+    # find 10% onset/offset points
+    ion_candi = np.where(data_rect[a:imax+1] > 0.2 * datamax)[0]
+    ion = ion_candi[0] + a if len(ion_candi) > 0 else a 
+    
+    ioff_candi = np.where(data_rect[imax:b+1] > 0.2 * datamax)[0]
+    ioff = ioff_candi[-1] + imax + 1 if len(ioff_candi) > 0 else b
+    
+    # ideal peak
+    x_points = [a, ion, imax, ioff, b]
+    y_points = [0, data_rect[ion], datamax, data_rect[ioff], 0]
+    
+    # interpolation
+    xx = np.linspace(a, b, b-a+1)
+    f_interp = interp1d(x_points, y_points, kind='cubic')
+    simerp = f_interp(xx)
+    
+    # area threshold rate
+    at1 = np.trapz(data_rect[a:b+1])
+    at2 = np.trapz(simerp)
+    atrate = at1 / at2 if at2 != 0 else 1
+    
+    if atrate < 0.9:
+        step = 5
+        for i in range(step, ndata - step):
+            leftp = data_rect[max(0, i-step):i]
+            rightp = data_rect[i+1 : i+1+step]
+            targp = data_rect[i]
+            
+            con_l = np.sum(leftp > targp)
+            con_r = np.sum(rightp >= targp)
+            
+            if con_l == step and con_r == step:
+                if coi == 1:
+                    b = i
+                elif coi == 2:
+                    a = i
+                break
+                
+    return a, b
+    
+
+# fractional area latency
+def _frac_area_latency(seg, tseg, area_tot, fraction, side):
+    
+    if area_tot == 0:
+        return np.nan
+    
+    if side == 'left':
+        cum_area = integrate.cumulative_trapezoid(seg, tseg, initial=0)
+    elif side == 'right':
+        cum_area = integrate.cumulative_trapezoid(seg[::-1], tseg[::-1], initial=0)[::-1]
+    else:
+        raise ValueError("`side` must be 'left' or 'right'.")
+    
+    target = fraction * area_tot
+    idx = np.where(cum_area >= target)[0]
+    frac_area = tseg[idx[0]] if len(idx) > 0 else np.nan
+    
+    return frac_area
+
+
+def _area_calculation(seg, tseg, mode):
+    
+    seg_t = _apply_mode(seg, mode)
+    area = integrate.trapezoid(seg_t, tseg)
+    mean_amp = area / (tseg[-1] - tseg[0]) if tseg[-1] != tseg[0] else np.nan
+    return area, mean_amp
+
+
+def _apply_mode(seg, mode):
+    
+    if mode == "abs":
+        return np.abs(seg)
+    elif mode == "pos":
+        return np.clip(seg, 0, None)   
+    elif mode == "neg":
+        return -np.clip(seg, None, 0)       
+    elif mode == "intg":
+        return seg  
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+    
+
+def _boundary_report(ch_name, old_indices, new_indices, timx):
+    
+    '''Report boundary change'''
+    
+    a_old, b_old = old_indices
+    a_new, b_new = new_indices
+    
+    if a_old != a_new or b_old != b_new:
+        return {
+            "channel": ch_name,
+            "orig_start": timx[a_old],
+            "orig_end": timx[b_old],
+            "new_start": timx[a_new],
+            "new_end": timx[b_new],
+            "shift_start_samples": a_new - a_old,
+            "shift_end_samples": b_new - b_old            
+        }
+        
+    return None
