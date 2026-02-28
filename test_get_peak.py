@@ -57,7 +57,7 @@ area_b, log = get_area(
     test_evoked,
     meas_win = (-0.2, 0), 
     picks =None,
-    mode = 'pos',
+    mode = 'neg',
     boundary_mode = 'auto',
     coi = 0,
     average = True,
@@ -73,13 +73,17 @@ show(log)
 ## 2. Result ==========================================================
 
 # result 1
-#   channel     value     latency     frac_latency
-#   Ave         -3.762    -0.136      -0.204
+#   channel     value       latency      frac_latency
+#   Ave         -3.761501   -0.136       -0.204
 
 # result 2
-#   channel     area      mean_amp    frac_area_lat
-#   Ave         0.503     2.517       -0.120
+#   channel     area        mean_amp     frac_area_lat
+#   Ave         0.503324    2.516622     -0.12
 
 # result 3
-#   orig_start     orig_end     new_start     new_end
-#   -0.2           0.0	        -0.344	      0.040
+#   channel     area        mean_amp     frac_area_lat
+#   Ave         0.602731    1.569611     -0.128
+
+#   orig_start  orig_end    new_start    new_end
+#   -0.2        0.0	        -0.344	     0.040
+
